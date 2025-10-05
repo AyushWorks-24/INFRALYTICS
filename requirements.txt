@@ -1,0 +1,12 @@
+streamlit
+pandas
+plotly
+pydeck
+xgboost
+shap
+scikit-learn
+matplotlib
+numpy
+ipython
+lime
+eli5
