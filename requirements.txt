@@ -7,6 +7,5 @@ shap
 scikit-learn
 matplotlib
 numpy
-ipython
-lime
-eli5
+folium
+streamlit-folium
