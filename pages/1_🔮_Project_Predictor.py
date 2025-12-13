@@ -1,121 +1,179 @@
-# pages/01_🔮_Project_Predictor.py
-
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
-from upgraded_model_logic import train_models_and_explainer, get_predictions_and_hotspots
-import lime
-import lime.lime_tabular
 
+# --- IMPORT THE NEW AI ENGINE ---
+# We no longer load models here. We just ask the engine for a prediction.
+from ml.predict import get_prediction
+from upgraded_model_logic import generate_risk_recommendations
 
-# --- Caching Models and Data ---
-@st.cache_resource
-def load_models():
-    """Loads and caches the trained models, explainer, and feature names."""
-    model_timeline, model_cost, explainer, feature_names = train_models_and_explainer()
-    return model_timeline, model_cost, explainer, feature_names
+st.set_page_config(page_title="Infralytics | Simulator", page_icon="🔮", layout="wide")
 
+# --- CUSTOM CSS FOR PROFESSIONAL LOOK ---
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+    }
+    .rec-box {
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        border-left-width: 5px;
+        border-left-style: solid;
+    }
+    .rec-critical { background-color: #ffe6e6; border-left-color: #ff4b4b; }
+    .rec-warning { background-color: #fff4e5; border-left-color: #ffbd45; }
+    .rec-actionable { background-color: #e6f3ff; border-left-color: #0083b8; }
+    .rec-success { background-color: #e6fffa; border-left-color: #00cc96; }
+    .rec-financial { background-color: #f3e5f5; border-left-color: #9c27b0; }
+</style>
+""", unsafe_allow_html=True)
 
-@st.cache_data
-def load_historical_data():
-    """Loads and caches the historical project data."""
-    return pd.read_csv('projects_data.csv')
+# --- HEADER ---
+st.title("🔮 AI Project Risk Simulator")
+st.markdown("""
+**Interactive Scenario Planning:** Adjust project parameters below to see how they impact 
+timeline delays and cost overruns in real-time using our **Counterfactual AI Engine**.
+""")
+st.divider()
 
+# --- INPUT SECTION (SIMULATOR CONTROLS) ---
+col_controls, col_dashboard = st.columns([1, 2])
 
-# Load all necessary assets
-model_timeline, model_cost, explainer_timeline, feature_names = load_models()
-historical_df = load_historical_data()
+with col_controls:
+    st.subheader("🎛️ Simulation Parameters")
+    with st.container(border=True):
+        # Input Controls
+        project_type = st.selectbox("Project Type", ["Overhead Line", "Substation", "Underground Cable"])
+        terrain = st.selectbox("Terrain", ["Plain", "Urban", "Hilly", "Coastal"])
+        
+        st.markdown("---")
+        st.caption("Risk Factors")
+        vendor_rating = st.slider("Vendor Rating (1=Poor, 5=Best)", 1, 5, 3)
+        hist_delays = st.slider("Historical Regional Delays", 0, 15, 2)
+        
+        st.markdown("---")
+        st.caption("Financials")
+        mat_cost = st.number_input("Material Cost (₹ Cr)", 50, 1000, 200, step=10)
+        
+        # Hidden Defaults (Can be made dynamic later)
+        lat, lon = 28.6, 77.2
+        
+        run_sim = st.button("🚀 Run AI Simulation", type="primary", use_container_width=True)
 
-# --- UI Sidebar ---
-st.sidebar.header("Enter Project Details")
-project_type = st.sidebar.selectbox('Project Type', historical_df['project_type'].unique())
-terrain = st.sidebar.selectbox('Terrain Type', historical_df['terrain'].unique())
-material_cost = st.sidebar.number_input('Material Cost (in Crores)', min_value=50, max_value=1000, value=200)
-vendor_rating = st.sidebar.slider('Vendor Performance Rating (1=Worst, 5=Best)', 1, 5, 3)
-historical_delays = st.sidebar.number_input('Number of Historical Delays (Similar Projects)', min_value=0, max_value=50,
-                                            value=8)
+# --- DASHBOARD SECTION ---
+with col_dashboard:
+    if run_sim:
+        # Prepare Input Data
+        input_data = {
+            "project_type": project_type,
+            "terrain": terrain,
+            "material_cost_crore": mat_cost,
+            "vendor_performance_rating": vendor_rating,
+            "historical_delays_project_count": hist_delays,
+            "lat": lat, "lon": lon
+        }
 
-# --- Main Page ---
-st.title("🔮 Project Predictor & Simulator")
-st.write("Input project details in the sidebar to get a real-time risk assessment.")
+        # 1. CALL THE INFERENCE ENGINE
+        # This returns everything we need: predictions, severity, AND feature names
+        results = get_prediction(input_data)
+        
+        delay = results['predicted_delay']
+        cost = results['predicted_cost_overrun']
+        score = results['severity_score']
+        feature_names = results['feature_names'] # Extracted from the result
 
-if st.sidebar.button('Run Prediction', type="primary"):
-    # 1. Get Prediction
-    input_data = {'project_type': project_type, 'terrain': terrain, 'material_cost_crore': material_cost,
-                  'vendor_performance_rating': vendor_rating, 'historical_delays_project_count': historical_delays}
-    results = get_predictions_and_hotspots(input_data, model_timeline, model_cost, explainer_timeline, feature_names)
-    predicted_delay = results['predicted_delay']
-    predicted_cost_overrun = results['predicted_cost_overrun']
-    severity_score = results['severity_score']
+        # 2. DISPLAY METRICS
+        st.subheader("📊 Projected Outcomes")
+        
+        m1, m2, m3 = st.columns(3)
+        
+        # Color Logic for Severity
+        sev_color = "normal"
+        if score > 60: sev_color = "inverse" # Red if high risk
+        
+        m1.metric("Predicted Delay", f"{int(delay)} Days", delta="AI Estimate", delta_color="off")
+        m2.metric("Cost Overrun", f"₹ {int(cost)} Lakhs", delta="Risk Factor", delta_color="inverse")
+        m3.metric("Severity Score", f"{int(score)} / 100", delta=f"{'High Risk' if score>60 else 'Stable'}", delta_color=sev_color)
+        
+        st.markdown("---")
 
-    # --- Display KPIs ---
-    st.subheader("Prediction Summary")
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("Predicted Timeline Delay", f"{predicted_delay:.0f} Days")
-    kpi2.metric("Predicted Cost Overrun", f"₹{predicted_cost_overrun:.2f} Lakhs")
-    kpi3.metric("Overall Risk Severity", f"{severity_score:.0f} / 100")
-    st.markdown("---")
+        # 3. RECOMMENDATION ENGINE
+        st.subheader("🧠 AI Risk Mitigation Strategy")
+        
+        recs = generate_risk_recommendations(input_data, delay, cost, score)
+        
+        for rec in recs:
+            # Map type to CSS class
+            css_map = {
+                "Critical": "rec-critical",
+                "Warning": "rec-warning", 
+                "Actionable": "rec-actionable",
+                "Success": "rec-success",
+                "Financial": "rec-financial"
+            }
+            css_class = css_map.get(rec['type'], "rec-actionable")
+            
+            st.markdown(f"""
+            <div class="rec-box {css_class}">
+                <span style="font-size:20px; margin-right:10px;">{rec.get('icon', '💡')}</span>
+                <div>
+                    <strong>{rec['type']}</strong><br>
+                    {rec['msg']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # --- Visualizations ---
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.subheader("Risk Gauge")
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number", value=severity_score, title={'text': "Severity Score"},
-            gauge={'axis': {'range': [None, 100]}, 'bar': {'color': "rgba(0,0,0,0.3)"},
-                   'steps': [{'range': [0, 40], 'color': "#3D9970"}, {'range': [40, 70], 'color': "#FFDC00"},
-                             {'range': [70, 100], 'color': "#FF4136"}]}))
-        fig_gauge.update_layout(height=350)
-        st.plotly_chart(fig_gauge, use_container_width=True)
+        st.markdown("---")
+        
+        # 4. EXPLAINABILITY (SHAP CHART)
+        st.subheader("🔎 What is driving this risk?")
+        st.caption("SHAP Value Analysis: Features pushing risk up (Red) or down (Blue)")
+        
+        shap_vals = results['shap_values'][0] # Get array
+        
+        # Create DataFrame for Plotly
+        feature_importance = pd.DataFrame({
+            'Feature': feature_names,
+            'Impact': shap_vals
+        })
+        
+        # Add color logic
+        feature_importance['Type'] = feature_importance['Impact'] > 0
+        feature_importance['Abs_Impact'] = feature_importance['Impact'].abs()
+        
+        # Sort and take top 7
+        top_features = feature_importance.sort_values('Abs_Impact', ascending=False).head(7)
+        
+        # Plot
+        fig = px.bar(
+            top_features, 
+            x="Impact", 
+            y="Feature", 
+            orientation='h',
+            color="Type",
+            color_discrete_map={True: '#ff4b4b', False: '#0083b8'}, # Red for bad, Blue for good
+            title="Top Factors Influencing Delay"
+        )
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        st.subheader("Prediction vs. Historical Average")
-        similar_projects = historical_df[
-            (historical_df['project_type'] == project_type) & (historical_df['terrain'] == terrain)]
-        avg_delay = similar_projects['actual_timeline_delay_days'].mean()
-        chart_data = pd.DataFrame({'Category': ["Your Project's Prediction", "Historical Average"],
-                                   'Delay (Days)': [predicted_delay, avg_delay]})
-        fig_bar = px.bar(chart_data, y='Category', x='Delay (Days)', text_auto=True, orientation='h',
-                         title="Predicted Delay Comparison")
-        fig_bar.update_layout(yaxis_title=None, height=350)
-        fig_bar.update_traces(marker_color=['#FF4136', 'lightgrey'], texttemplate='%{x:.0f} days',
-                              textposition='outside')
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    st.markdown("---")
-
-    # --- LIME EXPLANATION SECTION (REPLACES THE OLD SHAP SECTION) ---
-    st.subheader("LIME Explanation: Key Prediction Factors")
-    st.write(
-        "This chart shows the features that had the most impact on this specific prediction, as determined by the LIME algorithm.")
-
-    # Create a LIME explainer
-    X_train = pd.get_dummies(
-        historical_df.drop(['actual_timeline_delay_days', 'cost_overrun_lakhs', 'lat', 'lon'], axis=1, errors='ignore'))
-    explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=X_train.values, feature_names=feature_names,
-        class_names=['timeline_delay'], mode='regression'
-    )
-
-    # Explain the single prediction
-    instance_to_explain = results['input_aligned'].iloc[0].values
-    explanation = explainer.explain_instance(
-        instance_to_explain, model_timeline.predict, num_features=10
-    )
-
-    # Convert LIME explanation to a DataFrame for plotting
-    lime_results = pd.DataFrame(explanation.as_list(), columns=['feature', 'weight'])
-    lime_results['positive'] = lime_results['weight'] > 0
-
-    # Create a Plotly bar chart
-    fig_lime = px.bar(
-        lime_results.sort_values(by='weight'), x='weight', y='feature', orientation='h',
-        color='positive', color_discrete_map={True: '#FF4136', False: '#3D9970'},
-        title="Factors Pushing Prediction Higher (Red) or Lower (Green)"
-    )
-    fig_lime.update_layout(showlegend=False, yaxis_title=None, xaxis_title="Impact on Prediction (Weight)")
-    st.plotly_chart(fig_lime, use_container_width=True)
-
-else:
-    st.info("Please enter project details in the sidebar and click 'Run Prediction' to see the analysis.")
+    else:
+        # Empty State
+        st.info("👈 Adjust parameters on the left and click 'Run Simulation' to generate a risk profile.")
+        
+        # Placeholder visual
+        st.markdown("""
+        <div style="text-align: center; color: #888; padding: 50px;">
+            <h3>Waiting for Input...</h3>
+            <p>Select Project Type and Terrain to begin.</p>
+        </div>
+        """, unsafe_allow_html=True)

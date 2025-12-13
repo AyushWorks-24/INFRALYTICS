@@ -1,53 +1,107 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from upgraded_model_logic import train_models_and_explainer, calculate_severity_score
+import numpy as np
 
-st.title("🗺️ Regional & Terrain-Based Risk Analysis")
-st.write("Analyze how project outcomes are influenced by their geographical environment.")
+# --- IMPORT THE NEW INFERENCE ENGINE ---
+from ml.predict import model_service 
 
-@st.cache_resource
-def load_models():
-    model_timeline, model_cost, _, feature_names = train_models_and_explainer()
-    return model_timeline, model_cost, feature_names
+st.set_page_config(page_title="Regional Analysis", page_icon="🗺️", layout="wide")
 
-model_timeline, model_cost, feature_names = load_models()
+st.title("🗺️ Regional & Terrain Analysis")
+st.markdown("Investigate how geographical factors and terrain types impact project timelines and costs.")
 
+# --- BATCH PREDICTION LOGIC ---
 @st.cache_data
-def load_and_predict_portfolio_data():
-    df = pd.read_csv('projects_data.csv')
+def load_regional_data():
+    try:
+        df = pd.read_csv('projects_data.csv')
+    except FileNotFoundError:
+        st.error("🚨 'projects_data.csv' not found.")
+        return pd.DataFrame()
+
+    # 1. Preprocess
     df_processed = pd.get_dummies(df, columns=['project_type', 'terrain'])
-    df_aligned = df_processed.reindex(columns=feature_names, fill_value=0)
-    df['predicted_delay'] = model_timeline.predict(df_aligned)
-    df['predicted_cost_overrun'] = model_cost.predict(df_aligned)
-    df['severity_score'] = df.apply(lambda row: calculate_severity_score(row['predicted_delay'], row['predicted_cost_overrun']), axis=1)
-    def categorize_risk(score):
-        if score > 60: return "High Risk"
-        elif score > 30: return "Medium Risk"
-        else: return "Low Risk"
-    df['risk_level'] = df['severity_score'].apply(categorize_risk)
+    
+    # 2. Align Features
+    required_features = model_service.feature_names
+    df_aligned = df_processed.reindex(columns=required_features, fill_value=0).astype(float)
+
+    # 3. Batch Predict
+    df['predicted_delay'] = model_service.model_timeline.predict(df_aligned)
+    df['predicted_cost_overrun'] = model_service.model_cost.predict(df_aligned)
+    
+    # 4. Severity
+    d_score = np.minimum(df['predicted_delay'] / 365, 1.0) * 100
+    c_score = np.minimum(df['predicted_cost_overrun'] / 500, 1.0) * 100
+    df['severity_score'] = (0.6 * d_score) + (0.4 * c_score)
+    
     return df
 
-df = load_and_predict_portfolio_data()
+df = load_regional_data()
 
-st.subheader("Average Severity by Terrain")
-st.write("Compare the overall risk associated with different types of terrain.")
-avg_severity_by_terrain = df.groupby('terrain')['severity_score'].mean().sort_values(ascending=False)
-fig_bar = px.bar(avg_severity_by_terrain, x=avg_severity_by_terrain.index, y=avg_severity_by_terrain.values, labels={'x': 'Terrain Type', 'y': 'Average Severity Score'}, color=avg_severity_by_terrain.index, text_auto='.2s')
-st.plotly_chart(fig_bar, use_container_width=True)
+if df.empty:
+    st.stop()
 
-st.markdown("---")
-st.subheader("Risk Breakdown by Terrain and Project Type")
+# --- TERRAIN COMPARISON ---
+st.subheader("⛰️ Impact of Terrain on Delays")
+
+# Group by Terrain
+terrain_stats = df.groupby('terrain')[['predicted_delay', 'predicted_cost_overrun', 'severity_score']].mean().reset_index()
+terrain_stats = terrain_stats.sort_values('predicted_delay', ascending=False)
+
 col1, col2 = st.columns(2)
 
 with col1:
-    st.write("Count of High/Medium/Low Risk Projects by Terrain")
-    risk_counts = df.groupby(['terrain', 'risk_level']).size().reset_index(name='count')
-    fig_hist = px.histogram(risk_counts, x='terrain', y='count', color='risk_level', barmode='group', category_orders={"risk_level": ["Low Risk", "Medium Risk", "High Risk"]}, color_discrete_map={"High Risk": "#FF4136", "Medium Risk": "#FFDC00", "Low Risk": "#3D9970"})
-    st.plotly_chart(fig_hist, use_container_width=True)
+    # Bar Chart: Delay by Terrain
+    fig_bar = px.bar(
+        terrain_stats,
+        x='predicted_delay',
+        y='terrain',
+        orientation='h',
+        color='severity_score',
+        color_continuous_scale='Reds',
+        title="Average Predicted Delay by Terrain",
+        text_auto='.0f'
+    )
+    fig_bar.update_layout(xaxis_title="Avg Delay (Days)", yaxis_title="Terrain")
+    st.plotly_chart(fig_bar, use_container_width=True)
 
 with col2:
-    st.write("Average Delay (Days) by Terrain and Project Type")
-    pivot = pd.pivot_table(df, values='predicted_delay', index='project_type', columns='terrain')
-    fig_heatmap = px.imshow(pivot, text_auto=True, color_continuous_scale='Reds', title="Average Delay Heatmap")
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    # Box Plot: Variance Analysis
+    fig_box = px.box(
+        df, 
+        x='terrain', 
+        y='predicted_delay',
+        color='terrain',
+        title="Delay Variability Distribution",
+        points="all" # Show individual points
+    )
+    st.plotly_chart(fig_box, use_container_width=True)
+
+# --- REGIONAL INSIGHTS ---
+st.markdown("---")
+st.subheader("🔍 Comparative Analysis")
+
+# Pivot Table Heatmap
+st.write("Cross-Analysis: Average Cost Overrun (₹ Lakhs)")
+pivot_cost = pd.pivot_table(
+    df, 
+    values='predicted_cost_overrun', 
+    index='project_type', 
+    columns='terrain', 
+    aggfunc='mean'
+)
+
+fig_heat = px.imshow(
+    pivot_cost, 
+    text_auto=".1f", 
+    color_continuous_scale='Viridis', 
+    aspect="auto",
+    title="Heatmap: Cost Overrun by Type & Terrain"
+)
+st.plotly_chart(fig_heat, use_container_width=True)
+
+# --- AI INSIGHT ---
+st.info(f"💡 **AI Insight:** Projects in **{terrain_stats.iloc[0]['terrain']}** terrain show the highest average risk. "
+        f"Consider increasing contingency budgets for this region by **{int(terrain_stats.iloc[0]['severity_score'])}%**.")

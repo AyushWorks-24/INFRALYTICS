@@ -1,71 +1,210 @@
 import streamlit as st
-from upgraded_model_logic import train_models_and_explainer, calculate_severity_score
 import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
+# --- IMPORT INFERENCE ENGINE ---
+from ml.predict import model_service 
 
 st.set_page_config(
-    page_title="POWERGRID AI Command Center",
+    page_title="INFRALYTICS | Command Center",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-@st.cache_resource
-def load_models():
-    model_timeline, model_cost, _, feature_names = train_models_and_explainer()
-    return model_timeline, model_cost, feature_names
+# --- 🎨 CUSTOM CSS FOR "PRO" UI ---
+st.markdown("""
+<style>
+    /* Global Background */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    
+    /* Card Styling */
+    .dashboard-card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid #e0e0e0;
+        margin-bottom: 20px;
+    }
+    
+    /* KPI Value Styling */
+    .kpi-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #1f2937;
+    }
+    .kpi-label {
+        font-size: 14px;
+        color: #6b7280;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Risk Badges */
+    .risk-high { color: #dc2626; background-color: #fef2f2; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+    .risk-med { color: #d97706; background-color: #fffbeb; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+    
+    /* Navigation Cards */
+    .nav-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+        transition: transform 0.2s;
+        cursor: pointer;
+    }
+    .nav-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 15px rgba(0,0,0,0.1);
+        border-color: #3b82f6;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-model_timeline, model_cost, feature_names = load_models()
+# --- LOGIC: BATCH PREDICTION ---
+def calculate_severity_batch(delay, cost):
+    d_score = np.minimum(delay / 365, 1.0) * 100
+    c_score = np.minimum(cost / 500, 1.0) * 100
+    return (0.6 * d_score) + (0.4 * c_score)
 
 @st.cache_data
-def load_and_predict_portfolio_data():
-    df = pd.read_csv('projects_data.csv')
-    df_processed = pd.get_dummies(df, columns=['project_type', 'terrain'])
-    df_aligned = df_processed.reindex(columns=feature_names, fill_value=0)
-    df['predicted_delay'] = model_timeline.predict(df_aligned)
-    df['predicted_cost_overrun'] = model_cost.predict(df_aligned)
-    df['severity_score'] = df.apply(
-        lambda row: calculate_severity_score(row['predicted_delay'], row['predicted_cost_overrun']),
-        axis=1
-    )
-    def categorize_risk(score):
-        if score > 60: return "High Risk"
-        elif score > 30: return "Medium Risk"
-        else: return "Low Risk"
-    df['risk_level'] = df['severity_score'].apply(categorize_risk)
+def load_dashboard_data():
+    try:
+        df = pd.read_csv('projects_data.csv')
+    except:
+        return pd.DataFrame() # Return empty if fails
+
+    # Preprocessing
+    df_proc = pd.get_dummies(df, columns=['project_type', 'terrain'])
+    features = model_service.feature_names
+    
+    # Align
+    df_aligned = df_proc.reindex(columns=features, fill_value=0).astype(float)
+    
+    # Batch Predict
+    df['pred_delay'] = model_service.model_timeline.predict(df_aligned)
+    df['pred_cost'] = model_service.model_cost.predict(df_aligned)
+    
+    # Score
+    df['severity'] = calculate_severity_batch(df['pred_delay'], df['pred_cost'])
+    df['risk_level'] = df['severity'].apply(lambda x: "High" if x > 60 else ("Medium" if x > 30 else "Low"))
+    
     return df
 
-df = load_and_predict_portfolio_data()
+df = load_dashboard_data()
 
-st.title("⚡ AI-Powered Project Command Center")
-st.markdown("Welcome to the central hub for predicting and managing project risks for POWERGRID. Use the navigation on the left to access specialized dashboards.")
+# --- HERO HEADER ---
+col_logo, col_title, col_user = st.columns([1, 6, 2])
+with col_logo:
+    st.image("https://cdn-icons-png.flaticon.com/512/3061/3061341.png", width=80) # Placeholder Icon
+with col_title:
+    st.title("INFRALYTICS")
+    st.markdown("**AI-Powered Project Risk Intelligence Platform**")
+with col_user:
+    st.caption("Logged in as: **Admin**")
+    st.caption("Last Update: **Live** 🟢")
+
 st.markdown("---")
 
-total_projects = len(df)
-high_risk_projects = len(df[df['risk_level'] == 'High Risk'])
-avg_severity = df['severity_score'].mean()
-at_risk_capital = df[df['risk_level'] == 'High Risk']['predicted_cost_overrun'].sum()
+if df.empty:
+    st.error("⚠️ No data found. Please add 'projects_data.csv' to the root folder.")
+    st.stop()
 
+# --- 📊 ROW 1: EXECUTIVE KPI CARDS ---
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-kpi1.metric("Total Active Projects", f"{total_projects}")
-kpi2.metric("High-Risk Projects", f"{high_risk_projects}")
-kpi3.metric("Avg. Portfolio Severity", f"{avg_severity:.0f} / 100")
-kpi4.metric("Capital at High Risk", f"₹{at_risk_capital / 100:.2f} Cr")
 
-st.markdown("---")
-st.subheader("Explore Your Dashboards")
-col1, col2 = st.columns(2)
+total = len(df)
+high_risk = len(df[df['risk_level'] == 'High'])
+capital_risk = df[df['risk_level'] == 'High']['pred_cost'].sum()
+avg_delay = df['pred_delay'].mean()
 
-with col1:
-    st.info("#### 🔮 Project Predictor & Simulator")
-    st.write("Analyze a single new project. Input its details to get real-time predictions on delays, costs, and risk factors. Run 'what-if' scenarios to see how changes can mitigate risk.")
-    st.page_link("pages/1_🔮_Project_Predictor.py", label="Go to Predictor", icon="🔮")
-    st.info("#### 👥 Vendor Performance Analysis")
-    st.write("Deep-dive into vendor performance. Identify which vendors are associated with higher risks and analyze their project history to make informed partnership decisions.")
-    st.page_link("pages/3_👥_Vendor_Analysis.py", label="Analyze Vendors", icon="👥")
+# Helper for KPI Card
+def kpi_card(col, title, value, subtext, color="black"):
+    col.markdown(f"""
+    <div class="dashboard-card" style="border-left: 5px solid {color};">
+        <div class="kpi-label">{title}</div>
+        <div class="kpi-value">{value}</div>
+        <div style="font-size:12px; color:gray;">{subtext}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-with col2:
-    st.info("#### 📈 Portfolio Overview")
-    st.write("Get a 30,000-foot view of the entire project portfolio. Use the geospatial map and interactive charts to identify risk concentrations and monitor overall health.")
-    st.page_link("pages/2_📈_Portfolio_Overview.py", label="View Portfolio", icon="📈")
-    st.info("#### 🗺️ Regional Risk Analysis")
-    st.write("Analyze how geographical factors like terrain impact project outcomes. Compare risk levels and average delays across different operational environments.")
-    st.page_link("pages/4_🗺️_Regional_Analysis.py", label="Analyze Regions", icon="🗺️")
+kpi_card(kpi1, "Total Projects", f"{total}", "Active Portfolio", "#3b82f6")
+kpi_card(kpi2, "High Risk", f"{high_risk}", f"{(high_risk/total)*100:.1f}% of Portfolio", "#ef4444")
+kpi_card(kpi3, "Capital at Risk", f"₹{capital_risk/100:.1f} Cr", "Projected Overruns", "#f59e0b")
+kpi_card(kpi4, "Avg Delay", f"{int(avg_delay)} Days", "Across all regions", "#10b981")
+
+# --- 🚀 ROW 2: DASHBOARD SNAPSHOTS (Charts directly on home) ---
+col_chart1, col_chart2, col_actions = st.columns([2, 2, 1.5])
+
+with col_chart1:
+    st.markdown("##### 🌍 Portfolio Health Distribution")
+    # Sunburst Chart: Type -> Risk Level
+    fig_sun = px.sunburst(
+        df, 
+        path=['project_type', 'risk_level'], 
+        values='pred_cost',
+        color='risk_level',
+        color_discrete_map={'High': '#ef4444', 'Medium': '#f59e0b', 'Low': '#10b981'},
+        height=300
+    )
+    fig_sun.update_layout(margin=dict(t=0, l=0, r=0, b=0))
+    st.plotly_chart(fig_sun, use_container_width=True)
+
+with col_chart2:
+    st.markdown("##### 📉 Cost vs. Delay Correlation")
+    # Scatter Plot
+    fig_scat = px.scatter(
+        df, 
+        x='pred_delay', 
+        y='pred_cost', 
+        color='risk_level',
+        size='severity',
+        hover_data=['project_type'],
+        color_discrete_map={'High': '#ef4444', 'Medium': '#f59e0b', 'Low': '#10b981'},
+        height=300
+    )
+    fig_scat.update_layout(margin=dict(t=0, l=0, r=0, b=0), xaxis_title="Delay (Days)", yaxis_title="Cost (Lakhs)")
+    st.plotly_chart(fig_scat, use_container_width=True)
+
+with col_actions:
+    st.markdown("##### ⚡ Quick Actions")
+    
+    # Custom HTML Buttons that look like cards
+    st.markdown("""
+    <div class="nav-card">
+        <div style="font-weight:bold; font-size:16px;">🔮 Simulator</div>
+        <p style="font-size:12px; margin:0;">Test 'What-If' scenarios for new projects.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("Launch Simulator >", key="btn_sim", use_container_width=True):
+        st.switch_page("pages/1_🔮_Project_Predictor.py")
+    
+    st.write("") # Spacer
+
+    st.markdown("""
+    <div class="nav-card">
+        <div style="font-weight:bold; font-size:16px;">👥 Vendor Intel</div>
+        <p style="font-size:12px; margin:0;">Analyze contractor performance history.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("Analyze Vendors >", key="btn_vend", use_container_width=True):
+        st.switch_page("pages/3_👥_Vendor_Analysis.py")
+
+# --- 🚨 ROW 3: LIVE ALERTS FEED ---
+st.markdown("### 🚨 Recent Critical Alerts")
+critical_projects = df[df['risk_level'] == 'High'].sort_values('severity', ascending=False).head(3)
+
+if critical_projects.empty:
+    st.success("✅ System Status Normal: No Critical Risks Detected.")
+else:
+    for idx, row in critical_projects.iterrows():
+        with st.expander(f"🔴 ALERT: {row['project_type']} in {row['terrain']} Terrain (Severity: {int(row['severity'])})", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Predicted Delay", f"{int(row['pred_delay'])} Days")
+            c2.metric("Cost Overrun", f"₹ {int(row['pred_cost'])} Lakhs")
+            c3.write(f"**AI Recommendation:** High historical delay probability in {row['terrain']} terrain. Immediate audit advised.")

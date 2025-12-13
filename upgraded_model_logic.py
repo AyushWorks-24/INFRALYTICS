@@ -1,42 +1,54 @@
-import pandas as pd
-import xgboost as xgb
-import shap
-import numpy as np
+# Upgraded_model_logic.py
+# This file now handles BUSINESS RULES only (No ML training code here)
 
-def train_models_and_explainer(data_path='projects_data.csv'):
-    df = pd.read_csv(data_path)
-    df_processed = pd.get_dummies(df, columns=['project_type', 'terrain'])
-    features = df_processed.drop(['actual_timeline_delay_days', 'cost_overrun_lakhs', 'lat', 'lon'], axis=1, errors='ignore')
-    y_timeline = df_processed['actual_timeline_delay_days']
-    y_cost = df_processed['cost_overrun_lakhs']
-    feature_names = features.columns.tolist()
-    model_timeline = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, random_state=42)
-    model_timeline.fit(features, y_timeline)
-    model_cost = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, random_state=42)
-    model_cost.fit(features, y_cost)
-    explainer_timeline = shap.TreeExplainer(model_timeline)
-    print("✅ Models and SHAP explainer trained successfully.")
-    return model_timeline, model_cost, explainer_timeline, feature_names
+def generate_risk_recommendations(inputs, predicted_delay, predicted_cost, severity_score):
+    """
+    Translates ML numbers into actionable English advice.
+    """
+    recs = []
 
-def calculate_severity_score(predicted_delay, predicted_cost_overrun):
-    delay_score = min(predicted_delay / 365, 1.0) * 100
-    cost_score = min(predicted_cost_overrun / 500, 1.0) * 100
-    severity_score = (0.6 * delay_score) + (0.4 * cost_score)
-    return severity_score
+    # 1. Critical Severity
+    if severity_score > 60:
+        recs.append({
+            "type": "Critical",
+            "icon": "🚨",
+            "msg": f"Risk Score {int(severity_score)}/100 is high. VP-level approval is required before proceeding."
+        })
 
-def get_predictions_and_hotspots(input_data, model_timeline, model_cost, explainer, feature_names):
-    input_df = pd.DataFrame([input_data])
-    input_processed = pd.get_dummies(input_df)
-    input_aligned = input_processed.reindex(columns=feature_names, fill_value=0)
-    predicted_delay = model_timeline.predict(input_aligned)[0]
-    predicted_cost_overrun = model_cost.predict(input_aligned)[0]
-    severity_score = calculate_severity_score(predicted_delay, predicted_cost_overrun)
-    shap_values = explainer.shap_values(input_aligned)
-    return {
-        "predicted_delay": predicted_delay,
-        "predicted_cost_overrun": predicted_cost_overrun,
-        "severity_score": severity_score,
-        "shap_values": shap_values,
-        "feature_names": feature_names,
-        "input_aligned": input_aligned
-    }
+    # 2. Vendor Advice
+    if inputs.get('vendor_rating', 3) < 3:
+        # Calculate potential savings (Counterfactual logic)
+        saved_days = int(predicted_delay * 0.20)
+        recs.append({
+            "type": "Actionable",
+            "icon": "📉",
+            "msg": f"Vendor Rating is low. Switching to a Tier-1 vendor could save ~{saved_days} days of delay."
+        })
+
+    # 3. Terrain Specifics
+    terrain = inputs.get('terrain', '')
+    if terrain == "Hilly":
+        recs.append({
+            "type": "Warning",
+            "icon": "🏔️",
+            "msg": "Hilly terrain risk: Allocate +15% budget for landslide contingencies and retaining walls."
+        })
+    elif terrain == "Urban":
+        recs.append({
+            "type": "Info",
+            "icon": "🏙️",
+            "msg": "Urban density risk: Start 'Right of Way' (RoW) clearances 3 months early to avoid bottlenecks."
+        })
+
+    # 4. Historical Context
+    if inputs.get('historical_delays', 0) > 4:
+        recs.append({
+            "type": "Warning",
+            "icon": "⚠️",
+            "msg": "This region has a history of frequent delays. Weekly progress audits are recommended."
+        })
+
+    if not recs:
+        recs.append({"type": "Success", "icon": "✅", "msg": "Project parameters look stable. Proceed with standard monitoring."})
+
+    return recs
