@@ -1,11 +1,12 @@
 streamlit
 pandas
+numpy
 plotly
-pydeck
 xgboost
 shap
-scikit-learn
-matplotlib
-numpy
+fpdf
+groq
 folium
 streamlit-folium
+scikit-learn
+matplotlib

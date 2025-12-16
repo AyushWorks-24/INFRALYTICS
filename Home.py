@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import xgboost as xgb  # <--- CRITICAL IMPORT ADDED
 
 # --- IMPORT INFERENCE ENGINE ---
 from ml.predict import model_service 
@@ -86,9 +87,14 @@ def load_dashboard_data():
     # Align
     df_aligned = df_proc.reindex(columns=features, fill_value=0).astype(float)
     
-    # Batch Predict
-    df['pred_delay'] = model_service.model_timeline.predict(df_aligned)
-    df['pred_cost'] = model_service.model_cost.predict(df_aligned)
+    # --- CRITICAL FIX START ---
+    # Convert DataFrame to DMatrix (Native XGBoost Format)
+    dmatrix_data = xgb.DMatrix(df_aligned)
+    
+    # Batch Predict using the DMatrix
+    df['pred_delay'] = model_service.model_timeline.predict(dmatrix_data)
+    df['pred_cost'] = model_service.model_cost.predict(dmatrix_data)
+    # --- CRITICAL FIX END ---
     
     # Score
     df['severity'] = calculate_severity_batch(df['pred_delay'], df['pred_cost'])
